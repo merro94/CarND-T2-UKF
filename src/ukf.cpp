@@ -142,6 +142,13 @@ void UKF::ProcessMeasurement(MeasurementPackage meas_package) {
   float dt = (meas_package.timestamp_ - time_us_) / 1000000.0; //dt - expressed in seconds
   time_us_ = meas_package.timestamp_;
 
+  // An enhancement that implemented to avoid numerical instability during prediction
+  while (dt > 0.2) {
+    double step = 0.1;
+    Prediction(step);
+    dt -= step;
+  }
+
   Prediction(dt);
 
   /*****************************************************************************
@@ -318,10 +325,17 @@ void UKF::UpdateRadar(MeasurementPackage meas_package) {
     double py = Xsig_pred_(1,i);
     double v = Xsig_pred_(2,i);
     double yaw = Xsig_pred_(3,i);
-    double yawd = Xsig_pred_(4,i);
-    Zsig(0,i) = sqrt(px*px + py*py);
-    Zsig(1,i) = atan2(py, px);
-    Zsig(2,i) = (px*cos(yaw)*v + py*sin(yaw)*v) / Zsig(0,i);
+
+    if (fabs(px) > 0.001 && fabs(py) > 0.001) {
+      Zsig(0,i) = sqrt(px*px + py*py);
+      Zsig(1,i) = atan2(py, px);
+      Zsig(2,i) = (px*cos(yaw)*v + py*sin(yaw)*v) / Zsig(0,i);
+    } else {
+      // handling the case when p_x == p_y == 0
+      Zsig(0,i) = 0.01;
+      Zsig(1,i) = 0.01;
+      Zsig(2,i) = 0.01;
+    }
   }
 
   //calculate mean predicted measurement
@@ -329,10 +343,6 @@ void UKF::UpdateRadar(MeasurementPackage meas_package) {
 
   //calculate measurement covariance matrix S
   S.fill(0);
-  S(0,0) = std_radr_ * std_radr_;
-  S(1,1) = std_radphi_ * std_radphi_;
-  S(2,2) = std_radrd_ * std_radrd_;
-
   for (int i = 1; i < n_aug_ * 2 + 1; i++) {
     VectorXd diff = Zsig.col(i) - z_pred;
     //angle normalization
@@ -341,6 +351,13 @@ void UKF::UpdateRadar(MeasurementPackage meas_package) {
 
     S = S + weights_(i) * diff * diff.transpose();
   }
+
+  //add measurement noise covariance matrix
+  MatrixXd R = MatrixXd(n_z,n_z);
+  R <<    std_radr_ * std_radr_, 0, 0,
+          0, std_radphi_ * std_radphi_, 0,
+          0, 0, std_radrd_ * std_radrd_;
+  S = S + R;
 
   //create example vector for incoming radar measurement
   VectorXd z = VectorXd(n_z);
